@@ -1,0 +1,48 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: cnlp-postgres
+    environment:
+      POSTGRES_USER: loanuser
+      POSTGRES_PASSWORD: loanpass
+      POSTGRES_DB: loans
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U loanuser -d loans"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  risk-service:
+    build:
+      context: ../services/risk-service
+      dockerfile: Dockerfile
+    image: your-docker-org/risk-service:latest
+    container_name: cnlp-risk
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+
+  loan-service:
+    build:
+      context: ../services/loan-service
+      dockerfile: Dockerfile
+    image: your-docker-org/loan-service:latest
+    container_name: cnlp-loan
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/loans
+      SPRING_DATASOURCE_USERNAME: loanuser
+      SPRING_DATASOURCE_PASSWORD: loanpass
+      APP_RISK_URL: http://risk-service:8000
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+      - risk-service
+
+volumes:
+  pgdata:

@@ -1,0 +1,60 @@
+pipeline {
+  agent any
+
+  environment {
+    REGISTRY = credentials('docker-registry-url')      // e.g., docker.io/your-org
+    REGISTRY_CREDS = 'docker-hub-credentials-id'       // Jenkins creds id
+    KUBECONFIG_CRED = 'kubeconfig-credentials-id'      // Jenkins file creds id
+    IMAGE_TAG = "v${env.BUILD_NUMBER}"
+  }
+
+  stages {
+    stage('Checkout') {
+      steps { checkout scm }
+    }
+
+    stage('Build & Test (loan-service)') {
+      steps {
+        dir('services/loan-service') {
+          sh 'mvn -q -DskipTests=false clean package'
+        }
+      }
+    }
+
+    stage('Build Images') {
+      steps {
+        script {
+          sh "docker build -t ${REGISTRY}/risk-service:${IMAGE_TAG} -f services/risk-service/Dockerfile services/risk-service"
+          sh "docker build -t ${REGISTRY}/loan-service:${IMAGE_TAG} -f services/loan-service/Dockerfile services/loan-service"
+        }
+      }
+    }
+
+    stage('Login & Push') {
+      steps {
+        withCredentials([usernamePassword(credentialsId: "${REGISTRY_CREDS}", usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+          sh "echo $DOCKER_PASS | docker login ${REGISTRY} -u $DOCKER_USER --password-stdin"
+        }
+        sh "docker push ${REGISTRY}/risk-service:${IMAGE_TAG}"
+        sh "docker push ${REGISTRY}/loan-service:${IMAGE_TAG}"
+      }
+    }
+
+    stage('Deploy to Kubernetes') {
+      steps {
+        withCredentials([file(credentialsId: "${KUBECONFIG_CRED}", variable: 'KUBECONFIG_FILE')]) {
+          sh 'export KUBECONFIG=$KUBECONFIG_FILE && kubectl apply -f deployments/k8s/namespace.yaml'
+          sh 'export KUBECONFIG=$KUBECONFIG_FILE && kubectl apply -f deployments/k8s/postgres.yaml'
+          sh 'export KUBECONFIG=$KUBECONFIG_FILE && kubectl apply -f deployments/k8s/risk-service.yaml'
+          sh 'export KUBECONFIG=$KUBECONFIG_FILE && kubectl apply -f deployments/k8s/loan-service.yaml'
+        }
+      }
+    }
+  }
+
+  post {
+    always {
+      sh 'docker image prune -f || true'
+    }
+  }
+}
